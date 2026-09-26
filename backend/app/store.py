@@ -4,9 +4,11 @@
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable, Mapping
 
 from app.seed import SEED_ROWS
+
+RowNormalizer = Callable[[Mapping[str, Any]], dict[str, Any]]
 
 
 class Store:
@@ -14,6 +16,7 @@ class Store:
         self._tables: dict[str, list[dict[str, Any]]] = {
             name: [dict(row) for row in rows] for name, rows in SEED_ROWS.items()
         }
+        self._normalizers: dict[str, RowNormalizer] = {}
 
     def module_names(self) -> list[str]:
         return sorted(self._tables)
@@ -27,10 +30,17 @@ class Store:
                 return row
         return None
 
+    def register_normalizer(self, module: str, normalizer: RowNormalizer) -> None:
+        """登记模块的展示派生规则，让概览与列表、详情保持同一状态标准。"""
+        self._normalizers[module] = normalizer
+
     def overview(self) -> dict[str, object]:
         modules: list[dict[str, object]] = []
         for name in self.module_names():
-            rows = self.rows(name)
+            rows: list[dict[str, Any]] = self.rows(name)
+            normalize = self._normalizers.get(name)
+            if normalize is not None:
+                rows = [normalize(row) for row in rows]
             modules.append({
                 "name": name,
                 "created": len(rows),
