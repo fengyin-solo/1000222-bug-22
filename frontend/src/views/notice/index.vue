@@ -36,7 +36,9 @@
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
-          <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
+          <td v-for="column in columns" :key="column">
+            {{ column === '通告状态' ? statusText(row) : (row[column] ?? '—') }}
+          </td>
           <td class="row-actions">
             <button
               v-for="action in actions"
@@ -65,21 +67,33 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 
-import { request } from '@/api/client'
+import { fetchJson, request } from '@/api/client'
 
-type Row = Record<string, string | number | null>
+type Row = Record<string, string | number | boolean | null>
+
+type Summary = {
+  total: number
+  pending: number
+  abnormal: number
+  by_status: Record<string, number>
+}
 
 const ENDPOINT = '/api/notice'
 const columns = ["通告编号", "拍摄日期", "集合时间", "拍摄地点", "拍摄场次", "出勤人员", "用车安排", "通告状态"]
 const actions = ["下发通告", "开始执行", "确认完成"]
 const statuses = ["待下发", "已下发", "执行中", "已完成"]
-const stats = [{"label": "今日通告", "value": 0}, {"label": "待下发通告", "value": 0}, {"label": "未完成通告", "value": 0}]
+const stats = ref([{"label": "今日通告", "value": 0}, {"label": "待下发通告", "value": 0}, {"label": "未完成通告", "value": 0}])
 
 const rows = ref<Row[]>([])
 const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+
+function statusText(row: Row) {
+  const text = String(row['通告状态'] ?? '—')
+  return row.abnormal ? `${text}（异常）` : text
+}
 
 function resetFilters() {
   filters.value = {}
@@ -99,14 +113,28 @@ async function runAction(action: string, row: Row) {
   try {
     const response = await request(`${ENDPOINT}/${row.id}/actions`, {
       method: 'POST',
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ values: { action } }),
     })
-    if (!response.ok) {
-      throw new Error('拍摄通告动作未生效，请稍后重试')
+    const result = await response.json()
+    if (!response.ok || !result.ok) {
+      throw new Error(result.message ?? '拍摄通告动作未生效，请稍后重试')
     }
     await reload()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '拍摄通告操作失败'
+  }
+}
+
+async function reloadStats() {
+  try {
+    const summary = await fetchJson<Summary>(`${ENDPOINT}/summary`)
+    stats.value = [
+      { label: '今日通告', value: summary.total },
+      { label: '待下发通告', value: summary.by_status['待下发'] ?? 0 },
+      { label: '未完成通告', value: summary.pending },
+    ]
+  } catch {
+    stats.value = stats.value.map((item) => ({ ...item, value: 0 }))
   }
 }
 
@@ -121,6 +149,7 @@ async function reload() {
     const payload = await response.json()
     rows.value = payload.items ?? []
     total.value = payload.total ?? rows.value.length
+    await reloadStats()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '拍摄通告列表读取失败'
   }
